@@ -43,9 +43,18 @@ jobs:
 
           # Procura a versao publicada na pagina.
           versions = re.findall(
-              r"\bv\d+\.\d+\.\d+\b", html, re.IGNORECASE
-          )
-          version = versions[0] if versions else None
+                r"\bv(\d+\.\d+\.\d+)\b",
+                html,
+                re.IGNORECASE
+            )
+
+            versions = sorted(
+                set(versions),
+                key=lambda v: tuple(map(int, v.split("."))),
+                reverse=True
+            )
+
+            version = "v" + versions[0] if versions else None
 
           if not version:
               raise RuntimeError(
