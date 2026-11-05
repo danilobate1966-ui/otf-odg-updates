@@ -1,0 +1,94 @@
+
+name: ODG Updates - Discord OTF
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: odg-updates
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verificar atualizacoes ODG
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          url = "https://operatordevgroup.com/downloads"
+          state = Path(".odg-version")
+          req = urllib.request.Request(
+              url, headers={"User-Agent": "Mozilla/5.0"}
+          )
+
+          with urllib.request.urlopen(req, timeout=30) as response:
+              html = response.read().decode("utf-8", errors="replace")
+
+          # Procura a versao publicada na pagina.
+          versions = re.findall(
+              r"\bv\d+\.\d+\.\d+\b", html, re.IGNORECASE
+          )
+          version = versions[0] if versions else None
+
+          if not version:
+              raise RuntimeError(
+                  "Versao nao encontrada. Verificar a pagina."
+              )
+
+          previous = state.read_text().strip() if state.exists() else None
+          print(f"Versao encontrada: {version}")
+          print(f"Versao anterior: {previous or 'nenhuma'}")
+
+          if previous == version:
+              print("Nenhuma nova versao detectada.")
+          else:
+              if previous:
+                  webhook = os.environ["DISCORD_WEBHOOK_URL"]
+                  payload = {
+                      "username": "ODG Updates",
+                      "content": (
+                          "⚔️ **ATUALIZAÇÃO ODG DETECTADA!**\n"
+                          f"📦 Nova versão: **{version}**\n"
+                          f"🔗 {url}\n"
+                          "🎮 Operadores OTF, confiram as novidades!"
+                      )
+                  }
+                  request = urllib.request.Request(
+                      webhook,
+                      data=json.dumps(payload).encode("utf-8"),
+                      headers={"Content-Type": "application/json"},
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(request, timeout=30):
+                      print("Notificacao enviada ao Discord.")
+
+              state.write_text(version + "\n")
+              print("Estado atualizado.")
+          PY
+
+      - name: Salvar versao monitorada
+        run: |
+          if [ -n "$(git status --porcelain -- .odg-version)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .odg-version
+            git commit -m "Atualizar versao ODG monitorada"
+            git push
+          fi
