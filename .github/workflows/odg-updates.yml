@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       enviar_teste:
-        description: "Enviar mensagem de TESTE ao Discord (sem anunciar atualizacao)"
-        required: false
+        description: "Enviar uma mensagem de teste ao Discord"
         type: boolean
+        required: false
         default: false
   schedule:
     - cron: "17 */6 * * *"
@@ -25,40 +25,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Enviar mensagem de teste ao Discord
-        if: ${{ inputs.enviar_teste }}
+      - name: Verificar ODG e notificar Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          mensagem = (
-              "🧪 **TESTE DE NOTIFICAÇÃO — OTF**\n"
-              "✅ O sistema ODG Updates conseguiu enviar uma mensagem ao Discord!\n"
-              "🔔 **Este é apenas um teste. Nenhuma nova versão foi anunciada.**\n"
-              "🔗 https://operatordevgroup.com/downloads"
-          )
-          dados = json.dumps({"content": mensagem}).encode("utf-8")
-          req = urllib.request.Request(
-              os.environ["DISCORD_WEBHOOK_URL"],
-              data=dados,
-              headers={
-                  "Content-Type": "application/json",
-                  "User-Agent": "DiscordBot (https://github.com/danilobate1966-ui/otf-odg-updates, 1.1)",
-              },
-              method="POST",
-          )
-          with urllib.request.urlopen(req, timeout=30) as resposta:
-              print("Teste enviado. HTTP:", resposta.status)
-          PY
-
-      - name: Verificar versao atual do ODG
-        if: ${{ !inputs.enviar_teste }}
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ENVIAR_TESTE: ${{ inputs.enviar_teste || 'false' }}
         run: |
           python3 - <<'PY'
           import json
@@ -68,84 +38,92 @@ jobs:
           from html.parser import HTMLParser
           from pathlib import Path
 
-          class ExtratorTexto(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.ignorar = 0
-                  self.partes = []
+          URL = "https://archduke-interactive.com/downloads"
+          ESTADO = Path(".odg-version")
+          WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
-              def handle_starttag(self, tag, attrs):
-                  if tag in ("script", "style", "noscript"):
-                      self.ignorar += 1
+          def avisar(mensagem):
+              if not WEBHOOK:
+                  raise RuntimeError("Secret DISCORD_WEBHOOK_URL nao configurado.")
+              payload = json.dumps({"content": mensagem}).encode("utf-8")
+              pedido = urllib.request.Request(
+                  WEBHOOK,
+                  data=payload,
+                  headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "DiscordBot (https://github.com/danilobate1966-ui/otf-odg-updates, 1.2)",
+                  },
+                  method="POST",
+              )
+              with urllib.request.urlopen(pedido, timeout=30) as resposta:
+                  print("Mensagem enviada ao Discord. HTTP:", resposta.status)
 
-              def handle_endtag(self, tag):
-                  if tag in ("script", "style", "noscript") and self.ignorar:
-                      self.ignorar -= 1
-
-              def handle_data(self, data):
-                  if not self.ignorar:
-                      self.partes.append(data)
-
-          pagina = "https://operatordevgroup.com/"
-          download = "https://operatordevgroup.com/downloads"
-          estado = Path(".odg-version")
-          requisicao = urllib.request.Request(
-              pagina,
-              headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
-          )
-          with urllib.request.urlopen(requisicao, timeout=30) as resposta:
-              html = resposta.read().decode("utf-8", errors="replace")
-
-          extrator = ExtratorTexto()
-          extrator.feed(html)
-          texto = " ".join(extrator.partes)
-
-          # Nao buscar a primeira versao: ha referencias historicas no site.
-          encontrado = re.search(
-              r"\bcurrent\s+pack\s+is\s+(v\d+\.\d+\.\d+)\b",
-              texto,
-              flags=re.IGNORECASE,
-          )
-          if not encontrado:
-              raise RuntimeError("Versao atual nao encontrada na pagina inicial do ODG.")
-
-          atual = encontrado.group(1).lower()
-          anterior = estado.read_text().strip().lower() if estado.exists() else None
-          print("Versao atual:", atual)
-          print("Versao registrada:", anterior or "nenhuma")
-
-          # Corrige o estado criado pelo monitor antigo, que registrou v2.2.3.
-          if anterior is None or anterior == "v2.2.3":
-              estado.write_text(atual + "\n")
-              print("Referencia inicial corrigida sem enviar aviso.")
-          elif atual == anterior:
-              print("Nenhuma atualizacao nova.")
+          if os.environ.get("ENVIAR_TESTE", "false").lower() == "true":
+              avisar(
+                  "🧪 **TESTE OTF — ARCHDUKE / ODG**\n"
+                  "✅ Conexao com o Discord funcionando.\n"
+                  "🔔 Esta mensagem nao representa uma nova atualizacao.\n"
+                  f"🔗 {URL}"
+              )
           else:
-              def numero(v):
-                  return tuple(int(parte) for parte in v.lstrip("v").split("."))
+              class TextoHTML(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.ignorar = 0
+                      self.partes = []
 
-              if numero(atual) <= numero(anterior):
-                  print("Versao menor ou igual: possivel cache antigo. Sem aviso.")
+                  def handle_starttag(self, tag, attrs):
+                      if tag in ("script", "style", "noscript"):
+                          self.ignorar += 1
+
+                  def handle_endtag(self, tag):
+                      if tag in ("script", "style", "noscript") and self.ignorar:
+                          self.ignorar -= 1
+
+                  def handle_data(self, data):
+                      if not self.ignorar:
+                          self.partes.append(data)
+
+              pedido = urllib.request.Request(
+                  URL,
+                  headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
+              )
+              with urllib.request.urlopen(pedido, timeout=30) as resposta:
+                  html = resposta.read().decode("utf-8", errors="replace")
+
+              parser = TextoHTML()
+              parser.feed(html)
+              texto = " ".join(parser.partes)
+              achado = re.search(
+                  r"\bPack\s+v(\d+\.\d+\.\d+)\b", texto, re.IGNORECASE
+              )
+              if not achado:
+                  raise RuntimeError("Versao 'Pack vX.Y.Z' nao encontrada no site.")
+
+              atual = "v" + achado.group(1)
+              anterior = ESTADO.read_text().strip() if ESTADO.exists() else None
+              print("Versao encontrada:", atual)
+              print("Versao registrada:", anterior or "nenhuma")
+
+              def numero(versao):
+                  return tuple(map(int, versao.lstrip("vV").split(".")))
+
+              if anterior is None:
+                  ESTADO.write_text(atual + "\n")
+                  print("Primeira verificacao: referencia salva, sem anuncio.")
+              elif atual == anterior:
+                  print("Sem atualizacoes novas.")
+              elif numero(atual) > numero(anterior):
+                  avisar(
+                      "⚔️ **NOVA ATUALIZAÇÃO DO ODG OPERATIONS!**\n"
+                      f"📦 Nova versão: **{atual}** (anterior: {anterior})\n"
+                      "🎮 Operadores da OTF, confiram o novo pacote!\n"
+                      f"🔗 Download oficial: {URL}"
+                  )
+                  ESTADO.write_text(atual + "\n")
+                  print("Atualizacao registrada.")
               else:
-                  mensagem = (
-                      "⚔️ **NOVA ATUALIZAÇÃO ODG OPERATIONS!**\n"
-                      f"📦 Versão: **{atual}** (anterior: {anterior})\n"
-                      "🎮 Operadores OTF, atualizem o pacote antes das operações.\n"
-                      f"🔗 Download oficial: {download}"
-                  )
-                  dados = json.dumps({"content": mensagem}).encode("utf-8")
-                  req = urllib.request.Request(
-                      os.environ["DISCORD_WEBHOOK_URL"],
-                      data=dados,
-                      headers={
-                          "Content-Type": "application/json",
-                          "User-Agent": "DiscordBot (https://github.com/danilobate1966-ui/otf-odg-updates, 1.1)",
-                      },
-                      method="POST",
-                  )
-                  with urllib.request.urlopen(req, timeout=30) as resposta:
-                      print("Aviso enviado ao Discord. HTTP:", resposta.status)
-                  estado.write_text(atual + "\n")
+                  print("Site mostra versao mais antiga; sem aviso ou alteracao.")
           PY
 
       - name: Salvar versao monitorada
