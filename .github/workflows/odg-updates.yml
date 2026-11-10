@@ -95,7 +95,7 @@ jobs:
               parser.feed(html)
               texto = " ".join(parser.partes)
               achado = re.search(
-                  r"\bPack\s+v(\d+\.\d+\.\d+)\b", texto, re.IGNORECASE
+                  r"\bPack\s+v(\d+\.\d+(?:\.\d+)?)\b", texto, re.IGNORECASE
               )
               if not achado:
                   raise RuntimeError("Versao 'Pack vX.Y.Z' nao encontrada no site.")
